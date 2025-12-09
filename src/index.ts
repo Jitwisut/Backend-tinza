@@ -19,7 +19,7 @@ let waitingQueue: string[] = [];
 
 const app = new Elysia()
   .use(cors()) // อนุญาตให้ Frontend เชื่อมต่อข้าม Port ได้
-  .use(Auth)
+
   .ws("/match", {
     // Schema Validation (Optional แต่ใส่ไว้เพื่อความปลอดภัย)
     body: t.Object({
@@ -163,6 +163,7 @@ const app = new Elysia()
       handleDisconnect(ws.id);
     },
   })
+  .use(Auth)
   .listen(4000); // *** รันที่ Port 3001 ***
 
 console.log(
