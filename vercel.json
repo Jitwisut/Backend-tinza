@@ -1,11 +1,6 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/src/index.ts" }],
-  "functions": {
-    "src/index.ts": {
-      "runtime": "nodejs20.x"
-    }
-  },
   "installCommand": "bun install",
   "buildCommand": "bun run build",
-  "devCommand": "bun run dev"
+  "devCommand": "bun run dev",
+  "rewrites": [{ "source": "/(.*)", "destination": "/src/index.ts" }]
 }
