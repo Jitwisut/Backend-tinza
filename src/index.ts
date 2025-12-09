@@ -1,7 +1,7 @@
 // src/index.ts
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { Auth } from "./router/kuy";
+import { Auth } from "./router/user";
 // --- Types ---
 type User = {
   id: string;
