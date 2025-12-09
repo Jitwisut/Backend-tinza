@@ -1,0 +1,8 @@
+{
+  "installCommand": "bun install",
+  "buildCommand": "bun run build",
+  "devCommand": "bun run dev",
+  "outputDirectory": ".",
+  "framework": "flame",
+  "bunVersion": "1.x"
+}

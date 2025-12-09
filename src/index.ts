@@ -1,7 +1,7 @@
 // src/index.ts
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-
+import { Auth } from "./router/Userouter";
 // --- Types ---
 type User = {
   id: string;
@@ -19,6 +19,7 @@ let waitingQueue: string[] = [];
 
 const app = new Elysia()
   .use(cors()) // อนุญาตให้ Frontend เชื่อมต่อข้าม Port ได้
+  .use(Auth)
   .ws("/match", {
     // Schema Validation (Optional แต่ใส่ไว้เพื่อความปลอดภัย)
     body: t.Object({
