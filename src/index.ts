@@ -1,7 +1,8 @@
 // src/index.ts
-import { Elysia, t } from "elysia";
+import { Elysia } from "elysia"; // เอา t ออกเพราะไม่ได้ใช้ validation แล้ว
 import { cors } from "@elysiajs/cors";
 import { Auth } from "./router/user";
+
 // --- Types ---
 type User = {
   id: string;
@@ -11,29 +12,17 @@ type User = {
 };
 
 // --- State Management ---
-// เก็บข้อมูลผู้ใช้ทั้งหมดที่ online
 const users = new Map<string, User>();
-
-// เก็บ ID ของคนที่กำลังรอคิว (FIFO Queue)
 let waitingQueue: string[] = [];
 
 const app = new Elysia()
   .use(cors()) // อนุญาตให้ Frontend เชื่อมต่อข้าม Port ได้
 
   .ws("/match", {
-    // Schema Validation (Optional แต่ใส่ไว้เพื่อความปลอดภัย)
-    body: t.Object({
-      type: t.String(),
-      nickname: t.Optional(t.String()),
-      offer: t.Optional(t.Any()),
-      answer: t.Optional(t.Any()),
-      candidate: t.Optional(t.Any()),
-      partnerId: t.Optional(t.String()),
-    }),
+    // ❌ ลบส่วน body: t.Object(...) ออกแล้ว เพื่อป้องกัน Error 400 ตอน Handshake
 
     open(ws) {
       console.log(`[Connect] ${ws.id}`);
-      // เมื่อเชื่อมต่อ สร้าง User เปล่าๆ รอไว้
       users.set(ws.id, {
         id: ws.id,
         ws,
@@ -46,17 +35,17 @@ const app = new Elysia()
       const currentUser = users.get(ws.id);
       if (!currentUser) return;
 
+      // ตรวจสอบนิดหน่อยกัน Error เพราะเราลบ Validation ออกแล้ว
+      if (!message || !message.type) return;
+
       switch (message.type) {
         case "find_partner": {
           const { nickname } = message;
           currentUser.nickname = nickname || "Anonymous";
 
-          // 1. ตรวจสอบว่ามีคนรออยู่ในคิวไหม?
           if (waitingQueue.length > 0) {
-            // ดึงคนที่รออยู่ออกมา
             const partnerId = waitingQueue.shift();
 
-            // กรณีคิวหลุด หรือตัวเองจับคู่กับตัวเอง (Edge case)
             if (!partnerId || partnerId === ws.id || !users.has(partnerId)) {
               waitingQueue.push(ws.id);
               ws.send({ type: "waiting", message: "Waiting for someone..." });
@@ -66,21 +55,18 @@ const app = new Elysia()
             const partnerUser = users.get(partnerId);
 
             if (partnerUser) {
-              // --- Match Found! ---
               console.log(
                 `[Match] ${currentUser.nickname} <--> ${partnerUser.nickname}`
               );
 
-              // Update Partner ID ให้ทั้งคู่
               currentUser.partnerId = partnerId;
               partnerUser.partnerId = ws.id;
 
-              // แจ้งเตือนทั้งคู่
               ws.send({
                 type: "matched",
                 partnerId: partnerId,
                 partnerNickname: partnerUser.nickname,
-                initiator: true, // บอกให้คนนี้เป็นคนเริ่มส่ง Offer (Optional logic)
+                initiator: true,
               });
 
               partnerUser.ws.send({
@@ -91,7 +77,6 @@ const app = new Elysia()
               });
             }
           } else {
-            // 2. ไม่มีคนรอ -> เข้าไปต่อคิว
             waitingQueue.push(ws.id);
             ws.send({ type: "waiting", message: "Searching for a partner..." });
             console.log(`[Queue] ${currentUser.nickname} added to queue.`);
@@ -100,10 +85,8 @@ const app = new Elysia()
         }
 
         case "next": {
-          // Logic เหมือน disconnect แล้ว connect ใหม่
-          handleDisconnect(ws.id); // ตัดคู่เก่า
+          handleDisconnect(ws.id);
 
-          // Reset state เพื่อนับหนึ่งใหม่
           users.set(ws.id, {
             id: ws.id,
             ws,
@@ -111,10 +94,7 @@ const app = new Elysia()
             partnerId: null,
           });
 
-          // เรียกหาคู่ใหม่ทันที
-          const selfMatch = { ...message, type: "find_partner" };
-          // (เรียก logic ซ้ำ หรือ copy logic find_partner มาใส่ตรงนี้ก็ได้)
-          // เพื่อความง่าย ให้ Client ส่ง find_partner มาใหม่ หรือเราจัดการ manual:
+          // Logic หาคู่ใหม่
           if (waitingQueue.length > 0) {
             const partnerId = waitingQueue.shift();
             if (partnerId && partnerId !== ws.id && users.has(partnerId)) {
@@ -122,6 +102,7 @@ const app = new Elysia()
               const me = users.get(ws.id)!;
               me.partnerId = partnerId;
               partnerUser.partnerId = ws.id;
+
               ws.send({
                 type: "matched",
                 partnerId: partnerId,
@@ -143,15 +124,13 @@ const app = new Elysia()
           break;
         }
 
-        // --- Signaling (WebRTC) Relay ---
-        // ข้อความเหล่านี้จะถูกส่งผ่าน Server ไปหา Partner ตรงๆ
         case "offer":
         case "answer":
         case "ice": {
           const { partnerId } = currentUser;
           if (partnerId && users.has(partnerId)) {
             const partnerWs = users.get(partnerId)?.ws;
-            partnerWs.send(message); // ส่งต่อ message ไปหา partner
+            partnerWs.send(message);
           }
           break;
         }
@@ -163,34 +142,29 @@ const app = new Elysia()
       handleDisconnect(ws.id);
     },
   })
-  .use(Auth)
-  .listen(4000); // *** รันที่ Port 3001 ***
+  .use(Auth) // Auth อยู่หลัง WS ถูกต้องแล้ว
+  // ✅ แก้ Port ให้รองรับ Render (สำคัญมาก)
+  .listen(process.env.PORT || 4000);
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
 );
 export default app;
+
 // --- Helper Function ---
 function handleDisconnect(userId: string) {
   const user = users.get(userId);
   if (!user) return;
 
-  // 1. ถ้าอยู่ในคิว ให้ลบออก
   waitingQueue = waitingQueue.filter((id) => id !== userId);
 
-  // 2. ถ้ามีคู่สนทนาอยู่ ให้แจ้งเตือนคู่สนทนา
   if (user.partnerId) {
     const partner = users.get(user.partnerId);
     if (partner) {
       partner.ws.send({ type: "partner_disconnected" });
-      partner.partnerId = null; // ปลดสถานะคู่สนทนา
-      // อาจจะ Auto-queue partner กลับไปหาคนใหม่ก็ได้ถ้าต้องการ
+      partner.partnerId = null;
     }
   }
 
-  // 3. ลบ User ออกจากระบบ (ถ้าเป็นการปิด browser)
-  // หมายเหตุ: กรณีปุ่ม Next เราจะไม่ลบ users.delete(userId) ใน function นี้
-  // แต่เนื่องจาก Elysia close() จะถูกเรียกเมื่อ connection ขาดจริงๆ
-  // ดังนั้น logic ใน app.ws.close จึงเรียก function นี้ได้เลย
   users.delete(userId);
 }
