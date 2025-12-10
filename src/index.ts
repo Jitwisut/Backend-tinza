@@ -1,5 +1,5 @@
 // src/index.ts
-import { Elysia } from "elysia"; // เอา t ออกเพราะไม่ได้ใช้ validation แล้ว
+import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { Auth } from "./router/user";
 
@@ -16,11 +16,9 @@ const users = new Map<string, User>();
 let waitingQueue: string[] = [];
 
 const app = new Elysia()
-  .use(cors()) // อนุญาตให้ Frontend เชื่อมต่อข้าม Port ได้
+  .use(cors())
 
   .ws("/match", {
-    // ❌ ลบส่วน body: t.Object(...) ออกแล้ว เพื่อป้องกัน Error 400 ตอน Handshake
-
     open(ws) {
       console.log(`[Connect] ${ws.id}`);
       users.set(ws.id, {
@@ -33,10 +31,18 @@ const app = new Elysia()
 
     message(ws, message: any) {
       const currentUser = users.get(ws.id);
-      if (!currentUser) return;
+      if (!currentUser) {
+        console.error(`[Error] User ${ws.id} not found in users map`);
+        return;
+      }
 
-      // ตรวจสอบนิดหน่อยกัน Error เพราะเราลบ Validation ออกแล้ว
-      if (!message || !message.type) return;
+      // ✅ Validation - ป้องกัน malformed messages
+      if (!message || typeof message !== "object" || !message.type) {
+        console.error(`[Error] Invalid message format from ${ws.id}`);
+        return;
+      }
+
+      console.log(`[Message] ${currentUser.nickname} -> ${message.type}`);
 
       switch (message.type) {
         case "find_partner": {
@@ -46,9 +52,18 @@ const app = new Elysia()
           if (waitingQueue.length > 0) {
             const partnerId = waitingQueue.shift();
 
+            // ✅ Validation - ป้องกัน self-match และ invalid partner
             if (!partnerId || partnerId === ws.id || !users.has(partnerId)) {
+              console.log(
+                `[Queue] Invalid partner, adding ${currentUser.nickname} to queue`
+              );
               waitingQueue.push(ws.id);
-              ws.send({ type: "waiting", message: "Waiting for someone..." });
+              ws.send(
+                JSON.stringify({
+                  type: "waiting",
+                  message: "Waiting for someone...",
+                })
+              );
               return;
             }
 
@@ -56,37 +71,51 @@ const app = new Elysia()
 
             if (partnerUser) {
               console.log(
-                `[Match] ${currentUser.nickname} <--> ${partnerUser.nickname}`
+                `[Match] ${currentUser.nickname} <--> ${partnerUser.nickname} (initiator: ${currentUser.nickname})`
               );
 
               currentUser.partnerId = partnerId;
               partnerUser.partnerId = ws.id;
 
-              ws.send({
-                type: "matched",
-                partnerId: partnerId,
-                partnerNickname: partnerUser.nickname,
-                initiator: true,
-              });
+              // ✅ ส่ง JSON string แทน object
+              ws.send(
+                JSON.stringify({
+                  type: "matched",
+                  partnerId: partnerId,
+                  partnerNickname: partnerUser.nickname,
+                  initiator: true, // 👈 currentUser เป็น initiator
+                })
+              );
 
-              partnerUser.ws.send({
-                type: "matched",
-                partnerId: ws.id,
-                partnerNickname: currentUser.nickname,
-                initiator: false,
-              });
+              partnerUser.ws.send(
+                JSON.stringify({
+                  type: "matched",
+                  partnerId: ws.id,
+                  partnerNickname: currentUser.nickname,
+                  initiator: false, // 👈 partnerUser รอรับ offer
+                })
+              );
             }
           } else {
             waitingQueue.push(ws.id);
-            ws.send({ type: "waiting", message: "Searching for a partner..." });
+            ws.send(
+              JSON.stringify({
+                type: "waiting",
+                message: "Searching for a partner...",
+              })
+            );
             console.log(`[Queue] ${currentUser.nickname} added to queue.`);
           }
           break;
         }
 
         case "next": {
+          console.log(`[Next] ${currentUser.nickname} looking for new partner`);
+
+          // ✅ Cleanup old connection properly
           handleDisconnect(ws.id);
 
+          // ✅ Re-register user
           users.set(ws.id, {
             id: ws.id,
             ws,
@@ -94,32 +123,52 @@ const app = new Elysia()
             partnerId: null,
           });
 
-          // Logic หาคู่ใหม่
+          const me = users.get(ws.id)!;
+
+          // ✅ Logic หาคู่ใหม่ (เหมือน find_partner)
           if (waitingQueue.length > 0) {
             const partnerId = waitingQueue.shift();
+
             if (partnerId && partnerId !== ws.id && users.has(partnerId)) {
               const partnerUser = users.get(partnerId)!;
-              const me = users.get(ws.id)!;
+
+              console.log(
+                `[Match] ${me.nickname} <--> ${partnerUser.nickname} (initiator: ${me.nickname})`
+              );
+
               me.partnerId = partnerId;
               partnerUser.partnerId = ws.id;
 
-              ws.send({
-                type: "matched",
-                partnerId: partnerId,
-                partnerNickname: partnerUser.nickname,
-              });
-              partnerUser.ws.send({
-                type: "matched",
-                partnerId: ws.id,
-                partnerNickname: me.nickname,
-              });
+              // ✅ ส่ง initiator flag!
+              ws.send(
+                JSON.stringify({
+                  type: "matched",
+                  partnerId: partnerId,
+                  partnerNickname: partnerUser.nickname,
+                  initiator: true, // 👈 สำคัญมาก!
+                })
+              );
+
+              partnerUser.ws.send(
+                JSON.stringify({
+                  type: "matched",
+                  partnerId: ws.id,
+                  partnerNickname: me.nickname,
+                  initiator: false, // 👈 สำคัญมาก!
+                })
+              );
             } else {
               waitingQueue.push(ws.id);
-              ws.send({ type: "waiting", message: "Searching..." });
+              ws.send(
+                JSON.stringify({ type: "waiting", message: "Searching..." })
+              );
             }
           } else {
             waitingQueue.push(ws.id);
-            ws.send({ type: "waiting", message: "Searching..." });
+            ws.send(
+              JSON.stringify({ type: "waiting", message: "Searching..." })
+            );
+            console.log(`[Queue] ${me.nickname} added to queue (next).`);
           }
           break;
         }
@@ -128,27 +177,59 @@ const app = new Elysia()
         case "answer":
         case "ice": {
           const { partnerId } = currentUser;
-          if (partnerId && users.has(partnerId)) {
-            const partnerWs = users.get(partnerId)?.ws;
-            partnerWs.send(message);
+
+          // ✅ Validation
+          if (!partnerId) {
+            console.error(
+              `[Error] ${currentUser.nickname} has no partner for ${message.type}`
+            );
+            return;
+          }
+
+          if (!users.has(partnerId)) {
+            console.error(`[Error] Partner ${partnerId} not found`);
+            // ส่งกลับว่า partner disconnected
+            ws.send(JSON.stringify({ type: "partner_disconnected" }));
+            currentUser.partnerId = null;
+            return;
+          }
+
+          const partnerWs = users.get(partnerId)?.ws;
+
+          if (partnerWs) {
+            console.log(
+              `[Relay] ${message.type} from ${currentUser.nickname} to partner`
+            );
+            // ✅ Forward as JSON string
+            partnerWs.send(JSON.stringify(message));
+          } else {
+            console.error(`[Error] Partner WebSocket not available`);
           }
           break;
         }
+
+        default:
+          console.warn(`[Warning] Unknown message type: ${message.type}`);
       }
     },
 
     close(ws) {
-      console.log(`[Disconnect] ${ws.id}`);
+      const user = users.get(ws.id);
+      console.log(
+        `[Disconnect] ${user?.nickname || ws.id} (Partner: ${
+          user?.partnerId || "none"
+        })`
+      );
       handleDisconnect(ws.id);
     },
   })
-  .use(Auth) // Auth อยู่หลัง WS ถูกต้องแล้ว
-  // ✅ แก้ Port ให้รองรับ Render (สำคัญมาก)
+  .use(Auth)
   .listen(process.env.PORT || 4000);
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
 );
+
 export type App = typeof app;
 
 // --- Helper Function ---
@@ -156,15 +237,21 @@ function handleDisconnect(userId: string) {
   const user = users.get(userId);
   if (!user) return;
 
+  // ✅ Remove from queue
   waitingQueue = waitingQueue.filter((id) => id !== userId);
 
+  // ✅ Notify partner
   if (user.partnerId) {
     const partner = users.get(user.partnerId);
     if (partner) {
-      partner.ws.send({ type: "partner_disconnected" });
+      console.log(
+        `[Notify] Sending partner_disconnected to ${partner.nickname}`
+      );
+      partner.ws.send(JSON.stringify({ type: "partner_disconnected" }));
       partner.partnerId = null;
     }
   }
 
   users.delete(userId);
+  console.log(`[Cleanup] User ${user.nickname} removed from system`);
 }
