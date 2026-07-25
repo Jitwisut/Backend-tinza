@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: tinza-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tinza
+    ports:
+      - "5432:5432"
+    volumes:
+      - tinza_pgdata:/var/lib/postgresql/data
+      # schema.sql จะถูกรันอัตโนมัติตอน init ครั้งแรก (เฉพาะตอน volume ยังว่าง)
+      - ./src/lib/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tinza"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  tinza_pgdata:

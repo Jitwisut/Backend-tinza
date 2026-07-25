@@ -40,3 +40,5 @@ yarn-error.log*
 **/*.log
 package-lock.json
 **/*.bun
+# ไฟล์ env สำหรับรัน e2e ในเครื่อง (มี secret ปลอม แต่ไม่ควร commit)
+.env.test
